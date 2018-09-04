@@ -1,0 +1,202 @@
+/* 
+ * File:   extern_parameters.h
+ * Author: c3156840
+ *
+ * Created on 23 July 2013, 11:39 AM
+ */
+
+#ifndef EXTERN_PARAMETERS_H
+#define	EXTERN_PARAMETERS_H
+#include <iostream>
+#include<fstream>
+#include <vector>
+#include <deque>
+#include <ilcplex/ilocplex.h>
+#include <ctime>
+#include "triobjective_NDP.h"
+#include <math.h>
+#include"node.h"
+//-------------------------Default----------------------------------------------
+#define Num_threads 1
+#define Relative_gap 1.0e-6
+#define eps 1.0e-6
+#define P_infinity 1.0e7
+#define N_infinity -1.0e7
+#define Big_M 100000
+#define Feasible_Solution_Activation
+#define Using_Relaxation_Information
+#define All_coefficients_Integer
+#define Removing_Redundant_Problems_Actication
+#define Using_Infeasible_Relaxation_Information
+#define Information_Harvesting_For_Output_File
+#define Revising_Big_M_Values
+#define Continue_Investigation_of_L_shape
+#define Continue_Investigation_of_rectangle
+//--------------------------Area and Volume-------------------------------------
+#define Calculating_Sum_Of_Potential_Rectangles
+#define Changing_Potential_Rectangles_Areas_To_Volumes
+//#define Termination_Algorithm_After_Achieving_The_Gap 
+//------------------------------------------------------------------------------
+//#define Changing_Weakly_to_Non_Regarding_UpperBounds
+//-------------------------------HyperVolume------------------------------------
+// #define Subroutine_Hyper_Volume_Activator
+//#define Termination_Algorithm_After_Achieving_The_Subroutine_HV_Gap 
+//------------------------------------------------------------------------------
+//#define Ending_CPLEX_Components
+//------------------------------------------------------------------------------
+#ifdef All_coefficients_Integer
+#define Big_eps_modifier 1.0e-1
+#else
+#define Big_eps_modifier 0
+#endif
+//------------------------------------------------------------------------------
+//------------------------------------------------------------------------------
+#ifndef Changing_Potential_Rectangles_Areas_To_Volumes
+//#define Negative_Infinity_As_Origin_To_Calculate_Area
+#endif
+//------------------------------------------------------------------------------
+//#define Active_Using_Providing_Ideal_Nadir_Points_for_BigM
+//------------------------------------------------------------------------------
+//some general variables
+extern bool Infeas_Relax_exist;
+extern int iterator_saver;
+extern double eps_value;
+extern double eps_value_x;
+extern double eps_value_y;
+extern bool First_NDP_exist;
+extern bool cplex_feas_status;
+extern bool cplex_ideal_detector;
+extern bool Relaxation_NDP_exist;
+extern int DOFI;//discarded objective function index
+extern int FAOFI;//First available objective function index
+extern int SAOFI;//Second available objective function index
+extern int Number_Variables;
+extern int Number_Bi;
+extern int Number_Int;
+extern int Number_Con;
+extern int Number_Constraints;
+extern double* F_cost;//Cost of variables of first objective function
+extern double* S_cost;//Cost of variables of second objective function
+extern double* T_cost;//Cost of variables of third objective function
+extern double** weight;//Weightmatrix
+extern double* RHS;//Right hand sides
+extern bool* Constraint_Type;//constraint type 0 means equality 1 mean less than or equal
+extern double* objective_values;
+extern int int_OV;//integer part of objective value
+extern double perturbation;
+extern double Max_perturbation;
+extern double Min_perturbation;
+extern double* Solution;
+extern double Maximum;
+extern int IP_Counter;
+extern double Discarded_OV;
+extern bool done;
+extern double* Origin_OV;
+extern double* Previous_Origin_OV;
+extern bool Origin_dominated;
+extern bool Global_LowerBound__dominated;
+extern bool Out_of_rectangle;
+extern double clock_Run_time;
+extern double clock_start_time;
+extern bool New_NDP_found;
+extern bool New_NDP_located;
+extern double Big_M_value;
+extern double Cut_Line;
+extern double* y_values;
+extern bool initial_Solution_exists;
+extern double* initial_Solution_OV;
+extern bool one_of_previous_NDP_obtained;
+extern double* Z_Ideal;
+extern double* Z_Nadir;
+extern double* Revised_Big_M_Values;
+//------------------------------------------------------------------------------
+//general queue variables
+extern std::vector<triobjective_NDP*> triobjective_NDP_list;//non-dominated points
+extern std::vector<triobjective_NDP*>::iterator triobjective_NDP_it;
+extern std::vector<triobjective_NDP*>::iterator triobjective_NDP_it_prim;
+extern std::vector<node*> node_list;//non-dominated points
+extern std::vector<node*>::iterator node_it;
+//--------------List of relaxations which leads to infeasibility----------------
+extern std::vector< std::vector < double > >Relaxation_Infeas_Inf;
+//------------------------------------------------------------------------------
+//defining model
+ILOSTLBEGIN
+typedef IloArray<IloNumVarArray> NumVar2DArray;
+            extern IloEnv env;
+            extern IloModel model;//main model
+            extern IloModel model_relaxation;//main model relaxation
+            extern IloObjective cost;
+            extern IloRangeArray   MConstraint;
+            extern IloRangeArray   Extra_Constraint;
+            //main constraint is generating
+            extern IloNumVarArray x_bi;
+            extern IloNumVarArray x_bi;
+            extern IloNumVarArray x_int;
+            extern IloNumVarArray x_con;
+            extern IloNumVarArray y_bi;
+            extern IloExprArray obj;
+            extern IloExpr objective1;
+            extern IloExpr objective2;
+            extern IloExpr objective3;
+            extern IloExpr Sum_all_OF;
+            extern IloNumVarArray startVarWithout;
+            extern IloNumVarArray startVarWith;
+            extern IloNumArray startVal;
+            extern IloCplex cplex;
+            extern IloCplex cplex_relaxation;
+//------------------------------------------------------------------------------
+extern ifstream data;
+extern ofstream Results;
+//------------------------------------------------------------------------------
+#define Area_Gap 0.2
+extern double Required_Time_to_Acheive_Gap;
+extern double Required_Points_to_Acheive_Gap;
+extern double Required_Rectangle_to_Acheive_Gap;
+extern double Required_IP_to_Acheive_Gap;
+extern double Achieved_Gap;
+#ifdef Calculating_Sum_Of_Potential_Rectangles
+extern std::vector<double>Sum_Rec_Time;
+extern std::vector<double>Sum_Rec_Area;
+extern double Area_Saver;
+extern double Initial_Area_Nadir_Ideal;
+extern ofstream Area_Time_Results;
+#endif
+//------------------------------------------------------------------------------
+extern int N_Rectangles;
+extern double IP_Start_Clock_Time;
+extern double Sum_All_Run_time_First_IP;
+extern double Sum_All_Run_time_Second_IP;
+extern int N_Rectangle_Solved_FirstIP;
+extern int N_Lshape_Solved_FirstIP; 
+extern int N_Rectangle_Solved_FirstIP_but_infeasible;
+extern int N_Lshape_Solved_FirstIP_but_infeasible;
+extern int N_Rectangle_Avoided_FirstIP;
+extern int N_Lshape_Avoided_FirstIP; 
+extern int N_Rectangle_Avoided_FirstIP_but_infeasible;
+extern int N_Lshape_Avoided_FirstIP_but_infeasible;
+extern int N_Rectangle_Solved_SecondIP;
+extern int N_Rectangle_Avoided_SecondIP;
+extern int N_Lshape_Solved_SecondIP;
+extern int N_Lshape_Avoided_SecondIP;
+//------------------------------------------------------------------------------
+ #define Volume_Gap 0.2
+ extern double Subroutine_Required_Time_to_Acheive_Gap;
+ extern double Subroutine_Required_Points_to_Acheive_Gap;
+ extern double Subroutine_Achieved_Gap;
+ extern double Subroutine_HV_optimal_value;
+ extern double Subroutine_Exact_Gap_to_Acheive_Gap;
+ extern double Subroutine_Total_time;
+#ifdef Subroutine_Hyper_Volume_Activator
+ extern std::vector<double>Subroutine_HV_Time;
+ extern std::vector<double>Subroutine_HV_Volume;
+ extern double Subroutine_Start_time;
+ extern double Subroutine_Volume_Saver;
+ extern int Subroutine_status;
+ extern ofstream HV_Results;
+ extern ofstream Subroutine_Param;
+ extern ofstream Subroutine_data;
+ extern ifstream Subroutine_output;
+ extern std::vector<triobjective_NDP*>::iterator Subroutine_triobjective_NDP_it;
+#endif
+#endif	/* EXTERN_PARAMETERS_H */
+

@@ -1,0 +1,299 @@
+/* 
+ * File:   main.cpp
+ * Author: c3156840
+ *
+ * Created on 23 July 2013, 11:28 AM
+ */
+
+#include <cstdlib>
+#include <iostream>
+#include <fstream>
+#include <ilcplex/ilocplex.h>
+#include <sys/time.h>
+#include <ctime>
+
+using namespace std;
+
+/*------------------------------------------------------------------------------
+ 
+ -----------------------------Public Variables----------------------------------
+ 
+ -----------------------------------------------------------------------------*/
+#define Output_Precision 20
+#define Per_epsilon 1.0e-9
+#define Euclidian_epsilon 1.0e-12
+#define Algorithm_Abs_Gap 1.0e-12
+#define Algorithm_Relative_Gap 1.0e-12
+#define CPLEX_Relative_Gap 1.0e-12
+#define Num_threads 1 
+#define Disable_Adding_Cutting_Planes_For_Intersection_Finder
+char* LP_file_name;
+int N_Variables;
+int N_Objectives;
+double* z_I;
+long double Vol_z_I(0);
+double* z_l;
+long double Vol_z_l(0);
+double* z_u;
+long double Vol_z_u(0);
+long double Volume;
+double* Sol_I;
+double* Sol_l;
+double Cutting_Plane_Value;
+int iteration(0);
+struct timeval startTime, endTime;
+double totalTime(0);
+double clock_Run_time(0);
+double clock_start_time;
+long double Euclidean_Distance;
+long double Previous_Vol_z_u;
+int N_LP(0);
+bool Attempt_Failed;
+ofstream Result;
+ofstream Final_Result;
+/*------------------------------------------------------------------------------
+ 
+ ------------------------Declaring CPLEX information----------------------------
+ 
+ -----------------------------------------------------------------------------*/
+ILOSTLBEGIN
+typedef IloArray<IloNumVarArray> NumVar2DArray;
+IloEnv env;
+IloModel model(env);
+IloObjective cost(env);
+IloRangeArray Extra_Constraints_For_Finding_Intersection(env);
+IloRangeArray List_of_Cutting_Planes(env);
+IloNumVar Ratio_Var(env, -IloInfinity, +IloInfinity, ILOFLOAT);
+//main constraint is generating
+IloRangeArray rngs(env);
+IloSOS1Array sos1(env);
+IloSOS2Array sos2(env);
+IloNumVarArray dec_var(env);
+IloExprArray ObjF(env);
+IloExpr Sum_ObjF(env);
+IloExpr Cutting_Plane(env);
+IloObjective object(env);
+IloCplex cplex(env);
+
+/*------------------------------------------------------------------------------
+ 
+ ------------------------------------Functions-----------------------------------
+ 
+ -----------------------------------------------------------------------------*/
+
+
+void Reading_LP_File_and_Generating_CPLEX_Variables() {
+    cplex.importModel(model, LP_file_name, object, dec_var, rngs, sos1, sos2);
+    N_Variables = dec_var.getSize();
+    ObjF.end();
+    ObjF = IloExprArray(env, N_Objectives);
+    Sum_ObjF.end();
+    Sum_ObjF = IloExpr(env);
+    cplex.end();
+    cplex = IloCplex(env);
+    for (int i = 0; i < N_Objectives; i++) {
+        ObjF[i] = rngs[i].getExpr();
+        Sum_ObjF += ObjF[i];
+    }
+    for (int i = 0; i < N_Objectives; i++) {
+        model.remove(rngs[i]);
+    }
+    model.remove(object);
+}
+
+void Generating_Public_Variables() {
+    z_I = new double [N_Objectives];
+    z_l = new double [N_Objectives];
+    for (int i = 0; i < N_Objectives; i++) {
+        z_l[i] = 0;
+    }
+    z_u = new double [N_Objectives];
+    Sol_I = new double [N_Variables];
+    Sol_l = new double [N_Variables];
+}
+
+long double Computing_Volume(double* Point) {
+    Volume = Point[0];
+    for (int i = 1; i < N_Objectives; i++) {
+        Volume *= Point[i];
+    }
+    return Volume;
+}
+
+void Intersection_Point_Finder() {
+#ifndef Disable_Adding_Cutting_Planes_For_Intersection_Finder
+    model.add(List_of_Cutting_Planes);
+#endif
+    N_LP++;
+    Extra_Constraints_For_Finding_Intersection.clear();
+    Extra_Constraints_For_Finding_Intersection.end();
+    Extra_Constraints_For_Finding_Intersection = IloRangeArray(env);
+    for (int i = 0; i < N_Objectives - 1; i++) {
+        Extra_Constraints_For_Finding_Intersection.add(z_u[i + 1] * ObjF[i] - z_u[i] * ObjF[i + 1] == 0);
+    }
+    model.add(Extra_Constraints_For_Finding_Intersection);
+    cost = IloMaximize(env, Sum_ObjF);
+    model.add(cost);
+    cplex.extract(model);
+    cplex.setOut(env.getNullStream());
+    cplex.setParam(IloCplex::Threads, Num_threads);
+    cplex.setParam(IloCplex::EpGap, CPLEX_Relative_Gap);
+    //cplex.exportModel("Instance.lp");
+    if (cplex.solve()) {
+        for (int i = 0; i < N_Variables; i++) {
+            Sol_I[i] = cplex.getValue(dec_var[i]);
+        }
+        for (int i = 0; i < N_Objectives; i++) {
+            z_I[i] = cplex.getValue(ObjF[i]);
+        }
+    } else {
+        Attempt_Failed = 1;
+        cout << "Intersection_Point_Finder_Return_Infeasiblity" << endl;
+    }
+    cplex.clear();
+    model.remove(Extra_Constraints_For_Finding_Intersection);
+#ifndef Disable_Adding_Cutting_Planes_For_Intersection_Finder
+    model.add(List_of_Cutting_Planes);
+#endif
+    model.remove(cost);
+    cost.end();
+}
+
+void Upper_Bound_Finder() {
+    model.add(List_of_Cutting_Planes);
+    for (int i = 0; i < N_Objectives; i++) {
+        N_LP++;
+        cost = IloMaximize(env, ObjF[i]);
+        model.add(cost);
+        cplex.extract(model);
+        cplex.setOut(env.getNullStream());
+        cplex.setParam(IloCplex::Threads, Num_threads);
+        cplex.setParam(IloCplex::EpGap, CPLEX_Relative_Gap);
+        //cplex.exportModel("Instance.lp");
+        if (cplex.solve()) {
+            z_u[i] = cplex.getObjValue();
+        } else {
+            Attempt_Failed = 1;
+            cout << "Upper_Bound_Finder_Return_Infeasiblity" << endl;
+            cout << "Best_Found_UB_Value_is: " << std::setprecision(Output_Precision) << Vol_z_u << endl;
+            cout << "Best_Found_LB_Value_is: " << std::setprecision(Output_Precision) << Vol_z_l << endl;
+        }
+        model.remove(cost);
+        cplex.clear();
+        cost.end();
+    }
+    model.remove(List_of_Cutting_Planes);
+}
+
+void Adding_The_Cutting_Plane() {
+    Cutting_Plane_Value = 0;
+    Cutting_Plane.clear();
+    for (int i = 0; i < N_Objectives; i++) {
+        Cutting_Plane_Value += (z_I[i] / z_u[i]);
+        Cutting_Plane += (ObjF[i] / z_u[i]);
+    }
+    List_of_Cutting_Planes.add(Cutting_Plane_Value - Cutting_Plane <= 0);
+}
+
+void Report_The_Solution_In_Hard_Disk() {
+    Result.open("Result.txt");
+    Result << " File_Name: " << LP_file_name << endl;
+    Result << " Iteration: " << iteration << endl;
+    Result << " Number_of_LPs: " << N_LP << endl;
+    Result << " Global_UB: " << std::setprecision(Output_Precision) << Vol_z_u << endl;
+    Result << " Global_LB: " << std::setprecision(Output_Precision) << Vol_z_l << endl;
+    Result << " Gap(%): " << (Vol_z_u - Vol_z_l)*100 / Vol_z_u << endl;
+    Result << " Distance_Between_LB_and_UB_Points: " << Euclidean_Distance << endl;
+    Result << " Wall_Time(s): " << (totalTime / 1000000L) << endl;
+    Result << " CPU_Time(s): " << (clock_Run_time / CLOCKS_PER_SEC) << endl;
+    Result << "------------------------------The Best Obtained Feasible Point----------------------------------------" << endl;
+    for (int i = 0; i < N_Objectives; i++) {
+        Result << ObjF[i] << ":" << " " << z_l[i] << endl;
+    }
+    Result << "-------------Values of All Decision Variables of The Model in the Best obtained Solution--------------" << endl;
+    for (int i = 0; i < N_Variables; i++) {
+        Result << dec_var[i] << ":" << " " << Sol_l[i] << endl;
+    }
+    Result.close();
+}
+
+void Report() {
+    gettimeofday(&endTime, NULL);
+    clock_Run_time += (clock() - clock_start_time);
+    totalTime += ((endTime.tv_sec - startTime.tv_sec) * 1000000L);
+    totalTime += (endTime.tv_usec - startTime.tv_usec);
+    cout << " Iteration: " << iteration << " Number_of_LPs: " << N_LP << " Global_UB: " << std::setprecision(Output_Precision) << Vol_z_u << " Global_LB: " << std::setprecision(Output_Precision) << Vol_z_l << " Gap(%): " << (Vol_z_u - Vol_z_l)*100 / Vol_z_u << " Wall_Time(s): " << (totalTime / 1000000L) << " CPU_Time(s): " << (clock_Run_time / CLOCKS_PER_SEC) << endl;
+    Report_The_Solution_In_Hard_Disk();
+    gettimeofday(&startTime, NULL);
+    clock_start_time = clock();
+}
+
+bool Euclidean_Distance_Is_Optimal() {
+    Euclidean_Distance = 0;
+    for (int i = 0; i < N_Objectives; i++) {
+        Euclidean_Distance += (z_u[i] - z_l[i])*(z_u[i] - z_l[i]);
+    }
+    Euclidean_Distance = sqrt(Euclidean_Distance);
+    if (Euclidean_Distance <= Euclidian_epsilon) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+void Optimizer() {
+    Reading_LP_File_and_Generating_CPLEX_Variables();
+    Generating_Public_Variables();
+    gettimeofday(&startTime, NULL);
+    clock_start_time = clock();
+    //---------------------------Initializing Phase-----------------------------
+    Upper_Bound_Finder();
+    Vol_z_u = Computing_Volume(z_u);
+    Previous_Vol_z_u = Vol_z_u;
+    //------------------------------Iterative Phase-----------------------------
+    while (Vol_z_u - Vol_z_l > Algorithm_Abs_Gap && ((Vol_z_u - Vol_z_l) / Vol_z_u) > Algorithm_Relative_Gap && Euclidean_Distance_Is_Optimal() == 0 && Attempt_Failed == 0) {
+        Report();
+        iteration++;
+        Intersection_Point_Finder();
+        Vol_z_I = Computing_Volume(z_I);
+        if (Vol_z_I > Vol_z_l) {
+            Vol_z_l = Vol_z_I;
+            for (int i = 0; i < N_Variables; i++) {
+                Sol_l[i] = Sol_I[i];
+            }
+            for (int i = 0; i < N_Objectives; i++) {
+                z_l[i] = z_I[i];
+            }
+        }
+        if (Vol_z_u - Vol_z_l > Algorithm_Abs_Gap && ((Vol_z_u - Vol_z_l) / Vol_z_u) > Algorithm_Relative_Gap && Attempt_Failed == 0) {
+            Adding_The_Cutting_Plane();
+            Upper_Bound_Finder();
+            Vol_z_u = Computing_Volume(z_u);
+            if (N_Objectives> 2 && Vol_z_u > Previous_Vol_z_u - Per_epsilon) {
+                break;
+            }
+            Previous_Vol_z_u = Vol_z_u;
+            if(N_Objectives==2 && z_u[0]>z_I[0]+Euclidian_epsilon && z_u[1]>z_I[1]+Euclidian_epsilon) {
+                for (int i = 0; i < N_Objectives; i++) {
+                    z_u[i] = z_l[i];
+                }
+                Vol_z_u = Vol_z_l;
+                break;
+            }
+        }
+    }
+    Report();
+    Final_Result.open("Final_Result.txt", ios::app);
+    Final_Result << LP_file_name << " " << iteration << " " << N_LP << " " << std::setprecision(Output_Precision) << Vol_z_u << " " << std::setprecision(Output_Precision) << Vol_z_l << " " << (Vol_z_u - Vol_z_l)*100 / Vol_z_u << " " << (totalTime / 1000000L) << " " << (clock_Run_time / CLOCKS_PER_SEC) << " " << Euclidean_Distance <<endl;
+    Final_Result.close();
+}
+
+int main(int argc, char *argv[]) {
+    //---------------------------Preparation Phase------------------------------
+    LP_file_name = argv[1];
+    N_Objectives = atoi(argv[2]);
+    Attempt_Failed = 0;
+    Optimizer();
+    return 0;
+}
+

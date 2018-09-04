@@ -1,0 +1,550 @@
+/* 
+ * File:   node.cpp
+ * Author: c3156840
+ * 
+ * Created on 19 August 2013, 4:12 PM
+ */
+
+#include "node.h"
+#include"Sorting.h"
+#include "extern_parameters.h"
+#include"Revising_Constraints.h"
+
+node::node() {
+    UB_Ovalues = new double[3];
+    LB_Ovalues = new double[3];
+    Origin_values = new double[3];
+    for (int i = 0; i < 3; i++) {
+#ifdef Changing_Potential_Rectangles_Areas_To_Volumes
+        if (i != DOFI) {
+            UB_Ovalues[i] = P_infinity;
+            LB_Ovalues[i] = N_infinity;
+            Origin_values[i] = P_infinity;
+        } else {
+            UB_Ovalues[i] = Z_Ideal[i];
+            LB_Ovalues[i] = Z_Nadir[i];
+            Origin_values[i] = Z_Nadir[i];
+        }
+#else
+        UB_Ovalues[i] = P_infinity;
+        LB_Ovalues[i] = N_infinity;
+        Origin_values[i] = P_infinity;
+#endif
+    }
+    First_iteration = 1;
+    area = P_infinity;
+    node_counter = 1;
+    Part_of_previous_item_in_PQ = 0;
+}
+//The following function is exactly Algorithm 2 in the paper. 
+
+void node::spiral_optimizer() {
+    First_NDP_exist = 1;
+    if (First_iteration == 1) {
+        FND_Operation();
+#ifdef Information_Harvesting_For_Output_File
+        if (Part_of_previous_item_in_PQ == 0) {
+            N_Rectangles++;
+        }
+#endif
+    }
+    done = 0;
+    First_iteration = 0;
+    reset_origin();
+    if (First_NDP_exist == 0) {
+        done = 1;
+    } else {
+        for (int i = 0; i < 3; i++) {
+            if (i != DOFI) {
+                objective_values[i] = P_infinity;
+            }
+        }
+        revise_Origin_value();
+    }
+#ifdef Termination_Algorithm_After_Achieving_The_Gap
+    if (Achieved_Gap < Area_Gap) {
+        done = 1;
+    }
+#endif
+    while (done == 0) {
+        Computing_Area_and_time_For_Statistics();
+        Calling_Subroutine_Hyper_Volume();
+        First_optimization_problem();
+        if (cplex_feas_status == 0) {
+            if (Infeas_Relax_exist == 0) {
+                Infeasibility_List_Update();
+            }
+            done = 1;
+        } else {
+            if (one_of_previous_NDP_obtained == 0) {
+                Second_optimization_problem();
+                triobjective_NDP_Sorting(objective_values, Solution);
+            }
+            revise_Origin_value();
+            Check_for_domination_of_LB();
+            if (Global_LowerBound__dominated == 1) {
+                done = 1;
+            } else {
+                Revising_UB_Ovalues_for_BigM();
+                if (Out_of_rectangle == 1) {
+                    done = 1;
+                } else {
+                    Check_for_domination_of_origin();
+                    if (Origin_dominated == 0) {
+                        Splitting(Previous_Origin_OV, Origin_OV, objective_values, LB_Ovalues[DOFI]);
+                    }
+                }
+            }
+        }
+#ifdef Termination_Algorithm_After_Achieving_The_Gap
+        if (Achieved_Gap < Area_Gap) {
+            done = 1;
+        }
+#endif
+
+#ifdef Termination_Algorithm_After_Achieving_The_Subroutine_HV_Gap
+        if (Subroutine_Achieved_Gap < Volume_Gap) {
+            done = 1;
+        }
+#endif 
+    }
+}
+//This following function is exactly Algorithm 1 in the paper.  
+
+void node::FND_Operation() {
+    done = 0;
+    First_NDP_exist = 0;
+    while (done == 0 && First_NDP_exist == 0) {
+        reset_origin();
+        Computing_Area_and_time_For_Statistics();
+        First_optimization_problem();
+        if (cplex_feas_status == 0) {
+            if (Infeas_Relax_exist == 0) {
+                Infeasibility_List_Update();
+            }
+            done = 1;
+        } else {
+            if (one_of_previous_NDP_obtained == 0) {
+                Second_optimization_problem();
+                triobjective_NDP_Sorting(objective_values, Solution);
+            }
+            Calling_Subroutine_Hyper_Volume();
+            Check_for_domination_of_LB();
+            if (Global_LowerBound__dominated == 1) {
+                done = 1;
+            } else {
+                Revising_UB_Ovalues_for_FND();
+                if (Out_of_rectangle == 0) {
+                    First_NDP_exist = 1;
+                }
+            }
+        }
+#ifdef Termination_Algorithm_After_Achieving_The_Gap
+        if (Achieved_Gap < Area_Gap) {
+            done = 1;
+        }
+#endif
+#ifdef Termination_Algorithm_After_Achieving_The_Subroutine_HV_Gap
+        if (Subroutine_Achieved_Gap < Volume_Gap) {
+            done = 1;
+        }
+#endif 
+    }
+}
+//The following two function are for revising and reseting $u^*$
+
+void node::revise_Origin_value() {
+    for (int i = 0; i < 3; i++) {
+        Previous_Origin_OV[i] = Origin_OV[i];
+    }
+    //----------------------------------------------------------------------------//
+    Origin_OV[DOFI] = objective_values[DOFI];
+    for (int i = 0; i < 3; i++) {
+        if (i != DOFI) {
+            Origin_OV[i] = fmin(Origin_OV[i], objective_values[i]);
+        }
+    }
+}
+
+void node::reset_origin() {
+    if (First_iteration == 0) {
+        if (Origin_values[FAOFI] < P_infinity - 1 && Origin_values[SAOFI] < P_infinity - 1) {
+            for (int i = 0; i < 3; i++) {
+                Origin_OV[i] = Origin_values[i];
+            }
+        } else {
+            for (int i = 0; i < 3; i++) {
+                Origin_OV[i] = objective_values[i];
+            }
+        }
+    } else {
+        for (int i = 0; i < 3; i++) {
+            finding_epsilon_value(UB_Ovalues[i]);
+            Origin_OV[i] = UB_Ovalues[i] + eps_value;
+        }
+    }
+}
+//The following function checks whether the obtained nondominated point dominates $u^*$
+
+void node::Check_for_domination_of_origin() {
+    Origin_dominated = 0;
+    if (objective_values[FAOFI] < Previous_Origin_OV[FAOFI] - eps && objective_values[SAOFI] < Previous_Origin_OV[SAOFI] - eps) {
+        Origin_dominated = 1;
+    }
+}
+//The following function checks whether the obtained nondominated point dominates $u^1$
+
+void node::Check_for_domination_of_LB() {
+    Global_LowerBound__dominated = 0;
+    if (objective_values[FAOFI] < LB_Ovalues[FAOFI] + eps && objective_values[SAOFI] < LB_Ovalues[SAOFI] + eps) {
+        Global_LowerBound__dominated = 1;
+    }
+}
+//The following function revise $u^2$ when the obtained point is out of rectangle in Algorithm 1
+
+void node::Revising_UB_Ovalues_for_FND() {
+    Out_of_rectangle = 0;
+    if (objective_values[FAOFI] < LB_Ovalues[FAOFI] + eps && objective_values[SAOFI] > LB_Ovalues[SAOFI] + eps) {
+#ifdef Revising_priority_Queue_Enahncement
+        General_Revising_Priority_Queue_Function(objective_values);
+#endif
+        Out_of_rectangle = 1;
+        Cut_Line = objective_values[SAOFI];
+        finding_epsilon_value(Cut_Line);
+        UB_Ovalues[SAOFI] = Cut_Line - eps_value - Big_eps_modifier;
+    } else {
+        if (objective_values[SAOFI] < LB_Ovalues[SAOFI] + eps && objective_values[FAOFI] > LB_Ovalues[FAOFI] + eps) {
+#ifdef Revising_priority_Queue_Enahncement
+            General_Revising_Priority_Queue_Function(objective_values);
+#endif
+            Out_of_rectangle = 1;
+            Cut_Line = objective_values[FAOFI];
+            finding_epsilon_value(Cut_Line);
+            UB_Ovalues[FAOFI] = Cut_Line - eps_value - Big_eps_modifier;
+        }
+    }
+}
+//The following function revise $u^2$ when the obtained point is out of L-shape in Algorithm 2
+
+void node::Revising_UB_Ovalues_for_BigM() {
+    Out_of_rectangle = 0;
+    if (objective_values[FAOFI] <= LB_Ovalues[FAOFI] + eps && objective_values[SAOFI] >= LB_Ovalues[SAOFI] + eps) {
+        Out_of_rectangle = 1;
+        Cut_Line = objective_values[SAOFI];
+        if (Previous_Origin_OV[SAOFI] < objective_values[SAOFI] - eps) {
+            finding_epsilon_value(Cut_Line);
+            UB_Ovalues[SAOFI] = Cut_Line - eps_value - Big_eps_modifier;
+            Special_Split_General_part1(Previous_Origin_OV, LB_Ovalues, UB_Ovalues);
+        } else {
+            finding_epsilon_value(Cut_Line);
+            UB_Ovalues[SAOFI] = Cut_Line - eps_value - Big_eps_modifier;
+            Special_Split_Genereal_Part2(LB_Ovalues, UB_Ovalues);
+        }
+    } else {
+        if (objective_values[SAOFI] <= LB_Ovalues[SAOFI] + eps && objective_values[FAOFI] >= LB_Ovalues[FAOFI] + eps) {
+            Out_of_rectangle = 1;
+            Cut_Line = objective_values[FAOFI];
+            if (Previous_Origin_OV[FAOFI] < objective_values[FAOFI] - eps) {
+                finding_epsilon_value(Cut_Line);
+                UB_Ovalues[FAOFI] = Cut_Line - eps_value - Big_eps_modifier;
+                Special_Split_General_part1(Previous_Origin_OV, LB_Ovalues, UB_Ovalues);
+            } else {
+                finding_epsilon_value(Cut_Line);
+                UB_Ovalues[FAOFI] = Cut_Line - eps_value - Big_eps_modifier;
+                Special_Split_Genereal_Part2(LB_Ovalues, UB_Ovalues);
+            }
+        }
+    }
+}
+
+/* Both 2D-NDP-Search(u) and 2D-L-NDP-Search(u^*,u) operations consist of two optimization problems. In the first optimization problem, the objective function is Min z_3(x).
+ However, in the second optimization the objective function is Min z_1(x)+z_2(x)+z_3(x). The only difference between these two operations is the constraints which should
+ be added to the first optimization problem. 
+ The following two functions are designed to solve the first and second optimization problems in both 2D-NDP-Search(u) and 2D-L-NDP-Search(u^*,u) operations. However, if the shape
+ is rectangle, i.e., First_iteration==1, constraints associated with 2D-NDP-Search(u) will be added to the first optimization problem. Similarly, when the shape is L-shape,
+ i.e., First_iteration==0, constraints associated with 2D-NDP-L-Search(u) will be added to the first optimization problem.*/
+
+void node::First_optimization_problem() {
+    Infeas_Relax_exist = 0;
+    Relaxation_NDP_exist = 0;
+    cplex_feas_status = 1;
+    one_of_previous_NDP_obtained = 0;
+    initial_Solution_exists = 0;
+#ifdef Ending_CPLEX_Components
+    cplex = IloCplex(env);
+#endif
+    cplex.resetTime();
+    Revising_constraint(Origin_OV, First_iteration, UB_Ovalues);
+#ifdef Ending_CPLEX_Components
+    cost.end();
+#endif
+    cost = IloMinimize(env, obj[DOFI]);
+    model.add(cost);
+    cplex.extract(model);
+    Setting_initial_Solution();
+    if (initial_Solution_exists == 0) {
+#ifdef Using_Infeasible_Relaxation_Information
+        Searching_for_proper_infeasibility_relaxation();
+#endif
+    }
+    if (Infeas_Relax_exist == 0) {
+        if (Relaxation_NDP_exist == 0) {
+            //cplex.setOut(env.getNullStream());
+            cplex.setParam(IloCplex::Threads, Num_threads);
+            cplex.setParam(IloCplex::EpGap, Relative_gap);
+            IP_Counter++;
+#ifdef Information_Harvesting_For_Output_File
+            IP_Start_Clock_Time = clock();
+#endif
+#ifdef Information_Harvesting_For_Output_File
+            if (First_iteration == 1) {
+                N_Rectangle_Solved_FirstIP++;
+            } else {
+                N_Lshape_Solved_FirstIP++;
+            }
+#endif
+            if (cplex.solve()) {
+#ifdef Information_Harvesting_For_Output_File
+                Sum_All_Run_time_First_IP += (clock() - IP_Start_Clock_Time);
+#endif
+                Discarded_OV = (cplex.getObjValue());
+#ifdef Removing_Redundant_Problems_Actication
+                finding_epsilon_value(initial_Solution_OV[DOFI]);
+                if (initial_Solution_exists == 1 && initial_Solution_OV[DOFI] <= Discarded_OV + eps_value + Big_eps_modifier && Discarded_OV <= initial_Solution_OV[DOFI] + eps_value + Big_eps_modifier) {
+#ifdef Information_Harvesting_For_Output_File
+                    if (First_iteration == 1) {
+                        N_Rectangle_Avoided_SecondIP++;
+                    } else {
+                        N_Lshape_Avoided_SecondIP++;
+                    }
+#endif
+                    one_of_previous_NDP_obtained = 1;
+                    for (int i = 0; i < 3; i++) {
+                        objective_values[i] = initial_Solution_OV[i];
+                    }
+#ifdef Using_Relaxation_Information
+                    triobjective_NDP_list.at(iterator_saver)->adding_one_dimension_to_vector();
+#endif
+
+                }
+#endif
+                if (one_of_previous_NDP_obtained == 0) {
+                    for (int i = 0; i < 3; i++) {
+                        objective_values[i] = cplex.getValue(obj[i]);
+                    }
+                    for (int i = 0; i < Number_Bi; i++) {
+                        Solution[i] = (cplex.getValue(x_bi[i]));
+                    }
+                    for (int i = 0; i < Number_Int; i++) {
+                        Solution[i + Number_Bi] = (cplex.getValue(x_int[i]));
+                    }
+                    for (int i = 0; i < Number_Con; i++) {
+                        Solution[i + Number_Bi + Number_Int] = (cplex.getValue(x_con[i]));
+                    }
+                }
+            } else {
+                cplex_feas_status = 0;
+#ifdef Information_Harvesting_For_Output_File
+                if (First_iteration == 1) {
+                    N_Rectangle_Solved_FirstIP_but_infeasible++;
+                } else {
+                    N_Lshape_Solved_FirstIP_but_infeasible++;
+                }
+#endif
+            }
+        } else {
+#ifdef Information_Harvesting_For_Output_File
+            if (First_iteration == 1) {
+                N_Rectangle_Avoided_FirstIP++;
+            } else {
+                N_Lshape_Avoided_FirstIP++;
+            }
+#endif
+            one_of_previous_NDP_obtained = 1;
+        }
+    } else {
+#ifdef Information_Harvesting_For_Output_File
+        if (First_iteration == 1) {
+            N_Rectangle_Avoided_FirstIP++;
+            N_Rectangle_Avoided_FirstIP_but_infeasible++;
+        } else {
+            N_Lshape_Avoided_FirstIP++;
+            N_Lshape_Avoided_FirstIP_but_infeasible++;
+        }
+#endif
+        cplex_feas_status = 0;
+    }
+#ifdef Ending_CPLEX_Components
+    cplex.end();
+#endif
+    model.remove(cost);
+    startVal.clear();
+}
+
+void node::Second_optimization_problem() {
+#ifdef Ending_CPLEX_Components
+    cplex = IloCplex(env);
+#endif
+    cplex.resetTime();
+    Revising_Second_optimization_UB_constraint(objective_values, First_iteration, UB_Ovalues);
+#ifdef Ending_CPLEX_Components
+    cost.end();
+#endif
+    cost = IloMinimize(env, Sum_all_OF);
+    model.add(cost);
+    cplex.extract(model);
+#ifdef Feasible_Solution_Activation
+    for (int i = 0; i < Number_Variables; ++i) {
+        startVal.add(Solution[i]);
+    }
+    cplex.addMIPStart(startVarWithout, startVal);
+#endif
+    cplex.setOut(env.getNullStream());
+    cplex.setParam(IloCplex::Threads, Num_threads);
+    cplex.setParam(IloCplex::EpGap, Relative_gap);
+    IP_Counter++;
+#ifdef Information_Harvesting_For_Output_File
+    IP_Start_Clock_Time = clock();
+#endif
+#ifdef Information_Harvesting_For_Output_File
+    if (First_iteration == 1) {
+        N_Rectangle_Solved_SecondIP++;
+    } else {
+        N_Lshape_Solved_SecondIP++;
+    }
+#endif
+    cplex.solve();
+#ifdef Information_Harvesting_For_Output_File
+    Sum_All_Run_time_Second_IP += (clock() - IP_Start_Clock_Time);
+#endif
+    for (int i = 0; i < 3; i++) {
+        objective_values[i] = cplex.getValue(obj[i]);
+    }
+    for (int i = 0; i < Number_Bi; i++) {
+        Solution[i] = (cplex.getValue(x_bi[i]));
+    }
+    for (int i = 0; i < Number_Int; i++) {
+        Solution[i + Number_Bi] = (cplex.getValue(x_int[i]));
+    }
+    for (int i = 0; i < Number_Con; i++) {
+        Solution[i + Number_Bi + Number_Int] = (cplex.getValue(x_con[i]));
+    }
+#ifdef Ending_CPLEX_Components
+    cplex.end();
+#endif
+    model.remove(cost);
+    startVal.clear();
+}
+//The following function computes potential hypervolume
+
+void node::Computing_Area_and_time_For_Statistics() {
+#ifdef Calculating_Sum_Of_Potential_Rectangles
+    Sum_Rec_Time.push_back((clock() - clock_start_time) / CLOCKS_PER_SEC);
+    Area_Saver = 0;
+    //---------------------------------current node---------------------------//
+    if (UB_Ovalues[FAOFI] > P_infinity - 1 || UB_Ovalues[SAOFI] > P_infinity - 1) {
+        if (First_iteration == 1) {
+            Area_Saver += Initial_Area_Nadir_Ideal;
+        } else {
+#ifdef Changing_Potential_Rectangles_Areas_To_Volumes
+            Area_Saver += ((((Z_Nadir[FAOFI] - Z_Ideal[FAOFI])*(Z_Nadir[SAOFI] - Z_Ideal[SAOFI])) - ((Z_Nadir[FAOFI] - Origin_OV[FAOFI])*(Z_Nadir[SAOFI] - Origin_OV[SAOFI]))) * fmax((Z_Nadir[DOFI] - Origin_OV[DOFI]), 0));
+#else
+            Area_Saver += Initial_Area_Nadir_Ideal - ((Z_Nadir[FAOFI] - Origin_OV[FAOFI])*(Z_Nadir[SAOFI] - Origin_OV[SAOFI]));
+#endif
+        }
+    } else {
+        if (First_iteration == 1) {
+#ifdef Changing_Potential_Rectangles_Areas_To_Volumes
+            Area_Saver += ((fmax((UB_Ovalues[FAOFI] - LB_Ovalues[FAOFI])*(UB_Ovalues[SAOFI] - LB_Ovalues[SAOFI]), 0)) * fmax((LB_Ovalues[DOFI] - UB_Ovalues[DOFI]), 0));
+#else
+            Area_Saver += fmax((UB_Ovalues[FAOFI] - LB_Ovalues[FAOFI])*(UB_Ovalues[SAOFI] - LB_Ovalues[SAOFI]), 0);
+#endif
+        } else {
+#ifdef Changing_Potential_Rectangles_Areas_To_Volumes
+            Area_Saver += (fmax(((UB_Ovalues[FAOFI] - LB_Ovalues[FAOFI])*(UB_Ovalues[SAOFI] - LB_Ovalues[SAOFI]))-((UB_Ovalues[FAOFI] - Origin_OV[FAOFI])*(UB_Ovalues[SAOFI] - Origin_OV[SAOFI])), 0) * fmax((LB_Ovalues[DOFI] - Origin_OV[DOFI]), 0));
+#else
+            Area_Saver += fmax(((UB_Ovalues[FAOFI] - LB_Ovalues[FAOFI])*(UB_Ovalues[SAOFI] - LB_Ovalues[SAOFI]))-((UB_Ovalues[FAOFI] - Origin_OV[FAOFI])*(UB_Ovalues[SAOFI] - Origin_OV[SAOFI])), 0);
+#endif
+        }
+    }
+    //--------------------------------other nodes-----------------------------//
+    for (node_it = node_list.begin() + 1; node_it != node_list.end(); node_it++) {
+#ifdef Negative_Infinity_As_Origin_To_Calculate_Area
+        if ((*node_it)->First_iteration == 1) {
+            Area_Saver += fmax(((*node_it)->UB_Ovalues[FAOFI] - (*node_it)->LB_Ovalues[FAOFI])*((*node_it)->UB_Ovalues[SAOFI] - (*node_it)->LB_Ovalues[SAOFI]), 0);
+        } else {
+            Area_Saver += fmax((((*node_it)->UB_Ovalues[FAOFI] - (*node_it)->LB_Ovalues[FAOFI])*((*node_it)->UB_Ovalues[SAOFI] - (*node_it)->LB_Ovalues[SAOFI]))-(((*node_it)->UB_Ovalues[FAOFI] - (*node_it)->Origin_values[FAOFI])*((*node_it)->UB_Ovalues[SAOFI] - (*node_it)->Origin_values[SAOFI])), 0);
+        }
+
+#else
+#ifdef Changing_Potential_Rectangles_Areas_To_Volumes
+        Area_Saver += (((*node_it)->area) * fmax(((*node_it)->LB_Ovalues[DOFI]-(*node_it)->UB_Ovalues[DOFI]), 0));
+#else
+        Area_Saver += (*node_it)->area;
+#endif
+
+#endif
+    }
+    Sum_Rec_Area.push_back(Area_Saver);
+    Achieved_Gap = double(Area_Saver / Initial_Area_Nadir_Ideal);
+    if (Required_Points_to_Acheive_Gap == 0 && Achieved_Gap <= Area_Gap) {
+        Required_Points_to_Acheive_Gap = triobjective_NDP_list.size();
+        Required_Time_to_Acheive_Gap = (clock() - clock_start_time) / CLOCKS_PER_SEC;
+        Required_Rectangle_to_Acheive_Gap = N_Rectangles;
+        Required_IP_to_Acheive_Gap = IP_Counter;
+    }
+#endif
+}
+//The following function is for calculating hypervolume (note that to use this function we must have a binary file from Zitzler code to compute hypervolume)
+
+void node::Calling_Subroutine_Hyper_Volume() {
+#ifdef Subroutine_Hyper_Volume_Activator
+    Subroutine_Start_time = clock();
+    {
+        Subroutine_Param.open("Subroutine_Param.dat");
+        Subroutine_Param << "dim" << " " << 3 << endl;
+        Subroutine_Param << "obj" << " " << "-" << " " << "-" << " " << "-" << endl;
+        Subroutine_Param << "method" << " " << 0 << endl;
+        Subroutine_Param << "nadir" << " " << Z_Nadir[0] << " " << Z_Nadir[1] << " " << Z_Nadir[2] << endl;
+        Subroutine_Param << "ideal" << " " << Z_Ideal[0] << " " << Z_Ideal[1] << " " << Z_Ideal[2] << endl;
+        Subroutine_Param << "wdf" << " " << 0 << endl;
+        Subroutine_Param << "hyp_ind_type" << " " << 0 << endl;
+        Subroutine_Param << "reference_point" << " " << Z_Nadir[0] << " " << Z_Nadir[1] << " " << Z_Nadir[2] << endl;
+        Subroutine_Param.close();
+
+    }
+    {
+        Subroutine_data.open("Subroutine_data.dat");
+        for (Subroutine_triobjective_NDP_it = triobjective_NDP_list.begin(); Subroutine_triobjective_NDP_it != triobjective_NDP_list.end(); Subroutine_triobjective_NDP_it++) {
+            Subroutine_data << (*Subroutine_triobjective_NDP_it)->tri_NDP_OV[0] << " " << (*Subroutine_triobjective_NDP_it)->tri_NDP_OV[1] << " " << (*Subroutine_triobjective_NDP_it)->tri_NDP_OV[2] << endl;
+        }
+        Subroutine_data.close();
+    }
+    Subroutine_status = system("./hypervolume_netbeans");
+    {
+        Subroutine_output.open("Subroutine_output.dat");
+        Subroutine_output >> Subroutine_Volume_Saver;
+        Subroutine_output.close();
+        Subroutine_Volume_Saver = Subroutine_Volume_Saver*-1;
+    }
+    {
+        Subroutine_Total_time += (clock() - Subroutine_Start_time);
+        Subroutine_Achieved_Gap = double((Subroutine_HV_optimal_value - Subroutine_Volume_Saver) / Subroutine_HV_optimal_value);
+        Subroutine_HV_Volume.push_back(Subroutine_Achieved_Gap);
+        Subroutine_HV_Time.push_back((clock() - clock_start_time - Subroutine_Total_time) / CLOCKS_PER_SEC);
+        if (Subroutine_Required_Points_to_Acheive_Gap == 0 && Subroutine_Achieved_Gap <= Volume_Gap) {
+            Subroutine_Required_Points_to_Acheive_Gap = triobjective_NDP_list.size();
+            Subroutine_Required_Time_to_Acheive_Gap = (clock() - clock_start_time - Subroutine_Total_time) / CLOCKS_PER_SEC;
+            Subroutine_Exact_Gap_to_Acheive_Gap = Subroutine_Achieved_Gap;
+        }
+    }
+
+#endif
+}
+
+node::~node() {
+    delete [] UB_Ovalues;
+    delete [] LB_Ovalues;
+    delete [] Origin_values;
+}
+
